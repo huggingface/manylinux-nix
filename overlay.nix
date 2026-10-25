@@ -14,7 +14,7 @@ let
     "2.28"
   ];
 
-  mkManylinuxPackages = final.callPackage ./pkgs { inherit nixpkgs-20191230; };
+  mkManylinuxPackages = final.callPackage ./manylinux { inherit nixpkgs-20191230; };
 in
 builtins.listToAttrs (
   map (version: {
