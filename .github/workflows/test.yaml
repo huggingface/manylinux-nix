@@ -1,0 +1,95 @@
+name: "Test"
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened] # trigger on PRs
+    paths-ignore:
+      - "*.md"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    name: Nix checks and example wheels (${{ matrix.system }})
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: aws-highmemory-32-plus-nix
+          - system: aarch64-linux
+            runner: aws-r8g-8xl-plus-nix
+    runs-on:
+      group: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: |
+            max-jobs = 4
+            cores = 12
+            sandbox-fallback = false
+      - uses: cachix/cachix-action@1eb2ef646ac0255473d23a5907ad7b04ce94065c # v17
+        with:
+          name: huggingface
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+        env:
+          USER: runner
+
+      - name: Nix checks
+        run: nix flake check -L
+
+      - name: Collect example wheels
+        run: |
+          mkdir wheels
+          for example in lxml pycryptodome; do
+            cp -L "$(nix build --no-link --print-out-paths \
+              ".#checks.${{ matrix.system }}.example-${example}")"/*.whl wheels/
+          done
+          ls -l wheels
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-${{ matrix.system }}
+          path: wheels/*.whl
+          if-no-files-found: error
+
+  test:
+    permissions:
+      contents: read
+    name: Test example wheels on AlmaLinux 8 (${{ matrix.system }})
+    needs: build
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wheels-${{ matrix.system }}
+          path: wheels
+
+      # Test against AlmaLinux 8, which has glibc 2.28.
+      - name: Test wheels
+        run: |
+          docker run --rm \
+            -v "$PWD/.github/test-wheels.sh:/test-wheels.sh:ro" \
+            -v "$PWD/wheels:/wheels:ro" \
+            almalinux:8 \
+            sh /test-wheels.sh /wheels
