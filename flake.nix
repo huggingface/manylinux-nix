@@ -55,6 +55,10 @@
           pkgs = pkgsFor system;
         in
         import ./tests { inherit (pkgs) lib manylinux_2_28; }
+        // import ./examples {
+          inherit (pkgs) lib manylinux_2_28;
+          inherit pkgs;
+        }
       );
 
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt-tree);
